@@ -1,0 +1,891 @@
+---
+title: "Replication script 'Experience of Discrimination in Egalitarian Societies:
+  The Sámi and Majority Populations in Sweden and Norway'"
+author: "for anonymous review"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: 
+    latex_engine: xelatex
+  html_document: default
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_dir = "reports") 
+  })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+This document is prepared in order to enable the replication of results presented in the paper "Experience of Discrimination in Egalitarian Societies: The Sámi and Majority Populations in Sweden and Norway". It can be viewed as an html document for easy reading, and the code snippets below can be run in R.
+
+Please note that the code relies on tidyverse framework. More specifically, the following packages are used:
+
+```{r}
+library(knitr)
+library(tidyverse)
+library(skimr)
+library(broom)
+library(kableExtra)
+library(simputation)
+```
+
+# Data preparation
+
+We begin with loading the dataset containing variables that we will need in the analyses. The data is from "Nordic Peoples Survey" (NPS). 
+```{r}
+load("data/NPS_df_select.RData")
+df <- df_nps_sub
+rm(df_nps_sub)
+```
+
+## Ethnic background
+
+We re-define ethnic background broadly to include any of own, mother's, or father's ethnic background. In the case of the Sámi, we include self-identification as well.
+```{r}
+df <- df %>% 
+  mutate(
+    maj_bg = ifelse(ethnbg_maj=="yes" | ethnbg_mo_maj=="yes" | 
+                      ethnbg_fa_maj=="yes", "yes", "no") %>% as_factor() %>% 
+      fct_relevel("no", "yes"),
+    sami_bg = ifelse(ethnbg_sam=="yes" | ethnbg_mo_sam=="yes" | ethnbg_fa_sam=="yes" | 
+                       !is.na(selfident_sam) & selfident_sam=="yes",
+                     "yes", "no") %>% as_factor() %>% fct_relevel("no", "yes"),
+    fin_bg = ifelse(ethnbg_fin=="yes" | ethnbg_mo_fin=="yes" | 
+                      ethnbg_fa_fin=="yes", "yes", "no") %>% as_factor() %>% 
+      fct_relevel("no", "yes"), 
+    tor_bg = ifelse(ethnbg_tor=="yes" | ethnbg_mo_tor=="yes" | 
+                      ethnbg_fa_tor=="yes", "yes", "no") %>% as_factor() %>% 
+      fct_relevel("no", "yes"), 
+    imm_bg = ifelse(ethnbg_imm=="yes" | ethnbg_mo_imm=="yes" | 
+                      ethnbg_fa_imm=="yes", "yes", "no") %>% as_factor() %>% 
+      fct_relevel("no", "yes"), 
+    oth_min_bg = ifelse(ethnbg_oth=="yes" | ethnbg_mo_oth=="yes" | 
+                          ethnbg_fa_oth=="yes", "yes", "no") %>% 
+      as_factor() %>% fct_relevel("no", "yes")
+    )
+```
+
+We also create a category of national minorities for those who indicate a minority background that is neither Sámi nor immigrant.
+```{r}
+df <- df %>% 
+  mutate(natmin_bg = ifelse(fin_bg=="yes" | tor_bg=="yes" | oth_min_bg=="yes", 
+                            "yes", "no") %>% as_factor() %>% fct_relevel("no", "yes"))
+```
+
+For clearer contrasts, we combine different ethnic backgrounds into a single categorical variable with four distinct categories. To deal with overlaps (multiple backgrounds), first we distinguish between people with majority-only background and any minority background. Among those with a minority background, we prioritise the Sámi (as our main interest), then assign immigrants to their own category, and finally we use the category of national minorities from above. If none of these was selected, we define it as a missing value.
+```{r}
+df <- df %>% 
+  mutate(
+    eth_bg_cats = case_when(
+      maj_bg=="yes" & sami_bg=="no" & imm_bg=="no" & natmin_bg=="no" ~ "Majority only", 
+      sami_bg=="yes" ~ "Sami", 
+      imm_bg=="yes" ~ "Immigrant", 
+      natmin_bg=="yes" ~ "National minorities",
+      TRUE ~ NA_character_
+      ) %>% as_factor() %>% fct_relevel("Majority only")
+  )
+```
+
+## Income
+
+In order to calculate equivalence income, first we need to calculate the coefficients based on the household size. We will use OECD modified scale, so the first adults get 1, each additional adult gets 0.5, and each child gets 0.3.
+```{r}
+df <- df %>% 
+  mutate(equiv_coef = 1 + (hhsize_adu - 1)*0.5 + hhsize_chi*0.3)
+```
+
+Income data is stored in two variables, first as the value in currency, and second (for those who have not provided the information in currency value) as one of 10 income brackets. To combine these, we transform the first into the second by using the same cut-off values. To calculate equivalence income, we need currency values; therefore, we assign the mid-values of the income brackets, then divide by the household size coefficient. We do this separately for each country due to differences in currencies, and we calculate standardised values within country sub-samples so that these are comparable between countries.
+```{r}
+df_swe <- df %>%
+  filter(country == "sweden") %>% 
+  mutate( 
+    hhinc_yg_comb_num = case_when(
+      hhinc_yg < 185000 ~ 1,
+      hhinc_yg >= 185000 & hhinc_yg < 279000 ~ 2, 
+      hhinc_yg >= 279000 & hhinc_yg < 350000 ~ 3, 
+      hhinc_yg >= 350000 & hhinc_yg < 431000 ~ 4, 
+      hhinc_yg >= 431000 & hhinc_yg < 513000 ~ 5, 
+      hhinc_yg >= 513000 & hhinc_yg < 589000 ~ 6, 
+      hhinc_yg >= 589000 & hhinc_yg < 671000 ~ 7, 
+      hhinc_yg >= 671000 & hhinc_yg < 780000 ~ 8, 
+      hhinc_yg >= 780000 & hhinc_yg < 971000 ~ 9, 
+      hhinc_yg >= 971000 ~ 10, 
+      TRUE ~ hhinc_yg_grp_num
+    ), 
+    hhinc_yg_comb_rev = case_when(
+      hhinc_yg_comb_num == 1 ~ 123000, 
+      hhinc_yg_comb_num == 2 ~ 232000, 
+      hhinc_yg_comb_num == 3 ~ 314500, 
+      hhinc_yg_comb_num == 4 ~ 390500, 
+      hhinc_yg_comb_num == 5 ~ 472000, 
+      hhinc_yg_comb_num == 6 ~ 551000, 
+      hhinc_yg_comb_num == 7 ~ 630000, 
+      hhinc_yg_comb_num == 8 ~ 725500, 
+      hhinc_yg_comb_num == 9 ~ 875500, 
+      hhinc_yg_comb_num == 10 ~ 1138500
+    ), 
+    hhinc_yg_equiv = hhinc_yg_comb_rev / equiv_coef, 
+    hhinc_yg_equiv_std = scale(hhinc_yg_equiv)[,1]
+  )
+
+df_nor <- df %>% 
+  filter(country == "norway") %>% 
+  mutate(
+    hhinc_yg_comb_num = case_when(
+      hhinc_yg < 256000 ~ 1,
+      hhinc_yg >= 256000 & hhinc_yg < 351000 ~ 2, 
+      hhinc_yg >= 351000 & hhinc_yg < 452000 ~ 3, 
+      hhinc_yg >= 452000 & hhinc_yg < 551000 ~ 4, 
+      hhinc_yg >= 551000 & hhinc_yg < 666000 ~ 5, 
+      hhinc_yg >= 666000 & hhinc_yg < 813000 ~ 6, 
+      hhinc_yg >= 813000 & hhinc_yg < 986000 ~ 7, 
+      hhinc_yg >= 986000 & hhinc_yg < 1194000 ~ 8, 
+      hhinc_yg >= 1194000 & hhinc_yg < 1526000 ~ 9, 
+      hhinc_yg >= 1526000 ~ 10, 
+      TRUE ~ hhinc_yg_grp_num
+    ), 
+    hhinc_yg_comb_rev = case_when(
+      hhinc_yg_comb_num == 1 ~ 211500, 
+      hhinc_yg_comb_num == 2 ~ 303500, 
+      hhinc_yg_comb_num == 3 ~ 401500, 
+      hhinc_yg_comb_num == 4 ~ 501500, 
+      hhinc_yg_comb_num == 5 ~ 608500, 
+      hhinc_yg_comb_num == 6 ~ 739500, 
+      hhinc_yg_comb_num == 7 ~ 899500, 
+      hhinc_yg_comb_num == 8 ~ 1090000, 
+      hhinc_yg_comb_num == 9 ~ 1360000, 
+      hhinc_yg_comb_num == 10 ~ 1791000
+    ), 
+    hhinc_yg_equiv = hhinc_yg_comb_rev / equiv_coef, 
+    hhinc_yg_equiv_std = scale(hhinc_yg_equiv)[,1]
+  )
+
+df <- bind_rows(df_swe, df_nor)
+rm(df_swe, df_nor)
+```
+
+## Age
+
+We calculate age based on the given year of birth, and we add a variable for age-squared to account for a possible quadratic effect of age.
+```{r}
+df <- df %>%
+  mutate(
+    age = 2021 - byear, 
+    age_sq = age^2
+  )
+```
+
+## Discrimination
+
+The variables that we process from this point onward are concerned with the second stage questionnaire data. So we create this subset.
+```{r}
+df_ssq <- df %>% 
+  filter(participation == "CATI & stage II")
+```
+
+In the second-stage questionnaire, answer categories for the question on discrimination included frequency. To ensure compatibility and comparability between samples, we transform the second version into a yes-no format similar to the one asked in the telephone interview. This will also help us to run logit regressions consistently.
+
+We begin with a description and comparison of the two versions.
+```{r}
+df_ssq %>% 
+  summarise(cati_na = sum(is.na(disc_exp_cati)), 
+            onli_na = sum(is.na(disc_exp)), 
+            caon_na = sum(is.na(disc_exp) & is.na(disc_exp_cati)), 
+            cati_na_prop = sum(is.na(disc_exp_cati))/n(), 
+            onli_na_prop = sum(is.na(disc_exp))/n(), 
+            caon_na_prop = sum(is.na(disc_exp) & is.na(disc_exp_cati))/n(),
+            cati_yes_prop = sum(disc_exp_cati=="yes", na.rm=TRUE)/n(),
+            onli_yes_prop = sum(disc_exp!="never" & !is.na(disc_exp), na.rm=TRUE)/n(), 
+            caon_yes_prop = sum(disc_exp_cati=="yes" | 
+                                   (disc_exp!="never" & !is.na(disc_exp)), na.rm=TRUE)/n()) %>% 
+  pivot_longer(everything()) %>% kable(format = "html") %>% 
+  kable_classic(full_width = F)
+
+df_ssq %>% 
+  group_by(disc_exp_cati) %>% 
+  summarise(p_no = sum(disc_exp=="never", na.rm=TRUE)/n(), 
+            p_yes = sum(disc_exp!="never" & !is.na(disc_exp), na.rm=TRUE)/n(),
+            na = sum(is.na(disc_exp))/n()) %>% kable(format = "html") %>% 
+  kable_classic(full_width = F)
+
+df_ssq %>% 
+  group_by(disc_exp) %>% 
+  summarise(p_no = sum(disc_exp_cati=="no", na.rm=TRUE)/n(), 
+            p_yes = sum(disc_exp_cati!="no" & !is.na(disc_exp_cati), na.rm=TRUE)/n(),
+            na = sum(is.na(disc_exp_cati))/n()) %>% kable(format = "html") %>% 
+  kable_classic(full_width = F)
+```
+
+In the second-stage questionnaire, there are 155 missing values for the discrimination question, corresponding to 11% of the total. Only 9 respondents had not answered the discrimination question at the at the telephone interview, and 2 of them did not answer it at the second stage. Apparently a considerable number did not want to answer the question for a second time.
+
+People are more likely to change their mind from no to yes (20%), than from yes to no (4%). 'On rare occasions' seems to be interpreted closer to 'no': 65% had said 'no' in the telephone interview. Meanwhile, not answering looks like a substitute for saying no: 79% of second-stage missing values were 'no's at the telephone interview (respondents unwilling to answer for a second time). So it makes sense to minimise missing values with answers from the telephone interview.
+
+To combine variables, we follow this strategy: (1) if the respondents did not answer the question either in telephone interview or in the questionnaire, it is missing; (2) if the respondent did not answer the question in the questionnaire but had answered the question with a "no" in the telephone interview, we assign "no"; (3) if the answer in the questionnaire is "never", we assign "no"; (4) if the answer in the questionnaire is "on rare occasions" and the answer in the telephone interview was "no", we assign "no"; (5) for all remaining cases, we assign "yes".
+```{r}
+df_ssq <- df_ssq %>% 
+  mutate(disc_exp_comb = case_when(
+    is.na(disc_exp) & is.na(disc_exp_cati) ~ NA_character_,
+    is.na(disc_exp) & disc_exp_cati == "no" ~ "no", 
+    disc_exp == "never" ~ "no",
+    disc_exp == "on rare occasions" & disc_exp_cati == "no" ~"no",
+    TRUE ~ "yes") %>% as_factor() %>% fct_relevel("no", "yes"))
+```
+
+## Language variables
+
+### Imputation
+
+Before combining language variables, we should deal with the missing values, otherwise missing values in a single dimension will result in missing values for the whole variable. We follow this strategy for each battery of questions (self-assessed proficiency in Sámi, home use of Sámi, general use of Sámi):
+
+* We remove the all-missing cases
+* We use k-nearest-neighbour method to impute data
+* We add back the all-missing cases
+* Finally, we add them back to the main dataset as new variables with suffix _imp.
+```{r}
+df_prof_sami <- df_ssq %>% 
+  select(id, country, sami_bg, prof_sami_passive_num:prof_sami_write_num)
+df_prof_sami <- df_prof_sami %>% 
+  filter(if_any(prof_sami_passive_num:prof_sami_write_num, ~!is.na(.))) %>% 
+  impute_knn( . -country -sami_bg -id ~ . -country -sami_bg -id | country + sami_bg) %>% 
+  bind_rows(df_prof_sami %>% 
+              filter(!if_any(prof_sami_passive_num:prof_sami_write_num, ~!is.na(.)))) %>% 
+  arrange(as.numeric(id))
+
+df_prof_maj <- df_ssq %>% 
+  select(id, country, sami_bg, prof_maj_passive_num:prof_maj_write_num)
+df_prof_maj <- df_prof_maj %>% 
+  filter(if_any(prof_maj_passive_num:prof_maj_write_num, ~!is.na(.))) %>% 
+  impute_knn( . -country -sami_bg -id ~ . -country -sami_bg -id | country + sami_bg) %>% 
+  bind_rows(df_prof_maj %>% 
+              filter(!if_any(prof_maj_passive_num:prof_maj_write_num, ~!is.na(.)))) %>% 
+  arrange(as.numeric(id))
+
+df_hlang <- df_ssq %>% 
+  select(id, country, hlang_mot_bef_num:hlang_och_cur_num)
+df_hlang <- df_hlang %>% 
+  filter(if_any(hlang_mot_bef_num:hlang_och_cur_num, ~!is.na(.))) %>% 
+  impute_knn( . -country -id ~ . -country -id | country) %>% 
+  bind_rows(df_hlang %>% 
+              filter(!if_any(hlang_mot_bef_num:hlang_och_cur_num, ~!is.na(.)))) %>% 
+  arrange(as.numeric(id))
+
+df_lit_sami <- df_ssq %>% 
+  select(id, country, freq_radio_sami_num:freq_writelong_sami_num)
+df_lit_sami <- df_lit_sami %>% 
+  filter(if_any(freq_radio_sami_num:freq_writelong_sami_num, ~!is.na(.))) %>% 
+  impute_knn( . -country -id ~ . -country -id | country) %>% 
+  bind_rows(df_lit_sami %>% 
+              filter(!if_any(freq_radio_sami_num:freq_writelong_sami_num, ~!is.na(.)))) %>% 
+  arrange(as.numeric(id))
+
+df_lit_maj <- df_ssq %>% 
+  select(id, country, freq_radio_maj_num:freq_writelong_maj_num)
+df_lit_maj <- df_lit_maj %>% 
+  filter(if_any(freq_radio_maj_num:freq_writelong_maj_num, ~!is.na(.))) %>% 
+  impute_knn( . -country -id ~ . -country -id | country) %>% 
+  bind_rows(df_lit_maj %>% 
+              filter(!if_any(freq_radio_maj_num:freq_writelong_maj_num, ~!is.na(.)))) %>% 
+  arrange(as.numeric(id))
+
+df_lang_imp <- bind_cols(df_prof_sami, df_prof_maj[-c(1:3)], df_hlang[-c(1:2)], 
+                         df_lit_sami[-c(1:2)], df_lit_maj[-c(1:2)])
+rm(df_prof_sami, df_prof_maj, df_hlang, df_lit_sami, df_lit_maj)
+
+df_ssq <- df_ssq %>% 
+  left_join(df_lang_imp, by = "id", suffix = c("", "_imp")) %>% 
+  select(-country_imp, -sami_bg_imp)
+```
+
+### Dimension reduction
+
+We use Principal Component Analysis (PCA) to see how the observed data can be reduced to fewer variables, and how much variation would be retained/lost with this reduction. 
+```{r}
+pca_prof_sami <- prcomp(na.omit(df_lang_imp[4:7]), scale. = TRUE)
+pca_prof_maj <- prcomp(na.omit(df_lang_imp[8:11]), scale. = TRUE)
+pca_hlang <- prcomp(na.omit(df_lang_imp[12:26]), scale. = TRUE)
+pca_lit_sami <- prcomp(na.omit(df_lang_imp[27:32]), scale. = TRUE)
+pca_lit_maj <- prcomp(na.omit(df_lang_imp[33:38]), scale. = TRUE)
+
+summary(pca_prof_sami) ; print(pca_prof_sami)
+summary(pca_prof_maj) ; print(pca_prof_maj)
+summary(pca_hlang) ; print(pca_hlang)
+summary(pca_lit_sami) ; print(pca_lit_sami)
+summary(pca_lit_maj) ; print(pca_lit_maj)
+
+```
+
+Looking at the first components, a good part of the variation can be explained by a compound variable, especially for self-assessed proficiency and home use (over 80%), while for general use the proportion of variance would be 68%. 
+
+Next, we want to use individual loadings for calculating weighted average scores. We turn these values into weights such that they add up to 1. The summaries above show that they are quite close to each other, so weighted average would not be too different from simple average. 
+```{r}
+prof_sami_pca_wt <- pca_prof_sami$rotation[,1]
+prof_maj_pca_wt <- pca_prof_maj$rotation[,1]
+hlang_pca_wt <- pca_hlang$rotation[,1]
+lit_sami_pca_wt <- pca_lit_sami$rotation[,1]
+lit_maj_pca_wt <- pca_lit_maj$rotation[,1]
+
+weights_list <- list(prof_sami_pca_wt, prof_maj_pca_wt, hlang_pca_wt, 
+                     lit_sami_pca_wt, lit_maj_pca_wt)
+weights_list <- map(weights_list, ~ . / sum(.))
+
+df_ssq <- df_ssq %>% 
+  mutate(
+    prof_sami_com = prof_sami_passive_num_imp * weights_list[[1]][1] + 
+           prof_sami_active_num_imp * weights_list[[1]][2] + 
+           prof_sami_read_num_imp * weights_list[[1]][3] + 
+           prof_sami_write_num_imp * weights_list[[1]][4], 
+    prof_maj_com = prof_maj_passive_num_imp * weights_list[[2]][1] + 
+           prof_maj_active_num_imp * weights_list[[2]][2] + 
+           prof_maj_read_num_imp * weights_list[[2]][3] + 
+           prof_maj_write_num_imp * weights_list[[2]][4],
+    hlang_com = hlang_mot_bef_num_imp * weights_list[[3]][1] + 
+           hlang_mot_aft_num_imp * weights_list[[3]][2] + 
+           hlang_mot_cur_num_imp * weights_list[[3]][3] + 
+           hlang_fat_bef_num_imp * weights_list[[3]][4] + 
+           hlang_fat_aft_num_imp * weights_list[[3]][5] + 
+           hlang_fat_cur_num_imp * weights_list[[3]][6] + 
+           hlang_sib_bef_num_imp * weights_list[[3]][7] + 
+           hlang_sib_aft_num_imp * weights_list[[3]][8] + 
+           hlang_sib_cur_num_imp * weights_list[[3]][9] + 
+           hlang_grp_bef_num_imp * weights_list[[3]][10] + 
+           hlang_grp_aft_num_imp * weights_list[[3]][11] + 
+           hlang_grp_cur_num_imp * weights_list[[3]][12] + 
+           hlang_och_bef_num_imp * weights_list[[3]][13] + 
+           hlang_och_aft_num_imp * weights_list[[3]][14] + 
+           hlang_och_cur_num_imp * weights_list[[3]][15], 
+    lit_sami_com = freq_radio_sami_num_imp * weights_list[[4]][1] + 
+           freq_tv_sami_num_imp * weights_list[[4]][2] + 
+           freq_readshort_sami_num_imp * weights_list[[4]][3] + 
+           freq_readlong_sami_num_imp * weights_list[[4]][4] + 
+           freq_writeshort_sami_num_imp * weights_list[[4]][5] + 
+           freq_writelong_sami_num_imp * weights_list[[4]][6], 
+    lit_maj_com = freq_radio_maj_num_imp * weights_list[[5]][1] + 
+           freq_tv_maj_num_imp * weights_list[[5]][2] + 
+           freq_readshort_maj_num_imp * weights_list[[5]][3] + 
+           freq_readlong_maj_num_imp * weights_list[[5]][4] + 
+           freq_writeshort_maj_num_imp * weights_list[[5]][5] + 
+           freq_writelong_maj_num_imp * weights_list[[5]][6]
+  )
+rm(df_lang_imp, pca_hlang, pca_lit_sami, pca_prof_sami, pca_prof_maj, 
+   weights_list, hlang_pca_wt, lit_sami_pca_wt, prof_sami_pca_wt, prof_maj_pca_wt, 
+   lit_maj_pca_wt, pca_lit_maj)
+```
+
+## Education
+
+First, we check how meaningful different categories of education level are. 
+```{r}
+df_ssq %>% 
+  group_by(country) %>% 
+  summarise(
+    lvl_0 = sum(edulevel=="compulsory education not completed", na.rm=T)/n(),
+    lvl_1 = sum(edulevel=="compulsory education", na.rm=T)/n(), 
+    lvl_2 = sum(edulevel=="upper secondary", na.rm=T)/n(), 
+    lvl_3 = sum(edulevel=="advanced vocational", na.rm=T)/n(), 
+    lvl_4 = sum(edulevel=="BA-level", na.rm=T)/n(), 
+    lvl_5 = sum(edulevel=="MA-level or higher", na.rm=T)/n(), 
+    no_ans = sum(is.na(edulevel))/n()) %>% 
+  pivot_longer(!country) %>% 
+  pivot_wider(names_from = "country") %>% 
+  kable(format = "html", digits = 3) %>% 
+  kable_classic(full_width = F)
+```
+
+There are very few people who selected levels 0 and 1: we merge them with level 2 (pre-tertiary education). We can see country differences for level 3 (higher in Sweden), and levels 4 and 5 (higher in Norway): we keep level 3 (advanced vocational education or university education without degree) as it is, and we combine levels 4 and 5 (education with academic degree).
+```{r}
+df_ssq <- df_ssq %>% 
+  mutate(
+    edulevel_red = case_when(
+      edulevel=="compulsory education not completed" | 
+        edulevel=="compulsory education" | 
+        edulevel=="upper secondary" ~ "Pre-tertiary" , 
+      edulevel=="advanced vocational" ~ "Advanced vocational", 
+      edulevel=="BA-level" | 
+        edulevel=="MA-level or higher" ~ "University", 
+      TRUE ~ NA_character_
+    ) %>% as_factor()
+  )
+```
+
+# Descriptive statistics
+
+## Categorical variables
+
+### Telephone interview data - full
+
+Here we calculate the statistics for the first version of discrimination experience, ethnic background categories, and gender.
+
+```{r}
+df %>% 
+  group_by(country) %>% 
+  summarise(
+    N_disc = sum(disc_exp_cati=="yes", na.rm = TRUE), 
+    R_disc = sum(disc_exp_cati=="yes", na.rm = TRUE)/n(),
+    N_sami = sum(eth_bg_cats=="Sami", na.rm = TRUE), 
+    R_sami = sum(eth_bg_cats=="Sami", na.rm = TRUE)/n(), 
+    N_natmin = sum(eth_bg_cats=="National minorities", na.rm = TRUE), 
+    R_natmin = sum(eth_bg_cats=="National minorities", na.rm = TRUE)/n(), 
+    N_imm = sum(eth_bg_cats=="Immigrant", na.rm = TRUE), 
+    R_imm = sum(eth_bg_cats=="Immigrant", na.rm = TRUE)/n(), 
+    N_maj = sum(eth_bg_cats=="Majority", na.rm = TRUE), 
+    R_maj = sum(eth_bg_cats=="Majority", na.rm = TRUE)/n(), 
+    N_male = sum(gender=="male", na.rm = TRUE), 
+    R_male = sum(gender=="male", na.rm = TRUE)/n(), 
+    N_female = sum(gender=="female", na.rm = TRUE), 
+    R_female = sum(gender=="female", na.rm = TRUE)/n(), 
+    N_div = sum(gender=="diverse", na.rm = TRUE), 
+    R_div = sum(gender=="diverse", na.rm = TRUE)/n() 
+    ) %>%
+  pivot_longer(!country) %>% 
+  pivot_wider(names_from = "country") %>% 
+  kable(format = "html", digits = 3) %>% 
+  kable_classic(full_width = F)
+```
+
+### Telephone interview data - Sámi-only
+
+Here we calculate statistics for home use of a Sámi language.
+```{r}
+df %>% 
+  filter(sami_bg=="yes") %>% 
+  group_by(country) %>% 
+  summarise(
+    N_hlang = sum(hlang_sam=="yes", na.rm = TRUE), 
+    R_hlang = sum(hlang_sam=="yes", na.rm = TRUE)/n(), 
+    N_hlang_par = sum(hlang_par_sam=="yes", na.rm = TRUE), 
+    R_hlang_par = sum(hlang_par_sam=="yes", na.rm = TRUE)/n(), 
+    N_hlang_gra = sum(hlang_gra_sam=="yes", na.rm = TRUE), 
+    R_hlang_gra = sum(hlang_gra_sam=="yes", na.rm = TRUE)/n()
+  ) %>% 
+  pivot_longer(!country) %>%
+  pivot_wider(names_from = "country") %>% 
+  kable(format = "html", digits = 3) %>% 
+  kable_classic(full_width = F)
+```
+
+### Second-stage questionnaire data
+
+Here we calculate statistics for the combined version of discrimination experience, and education levels as reduced to three groups.
+```{r}
+df_ssq %>%
+  group_by(country) %>% 
+  summarise(
+    N_disc = sum(disc_exp_comb=="yes", na.rm = TRUE), 
+    R_disc = sum(disc_exp_comb=="yes", na.rm = TRUE)/n(), 
+    N_edu1 = sum(edulevel_red=="Pre-tertiary", na.rm = TRUE),
+    R_edu1 = sum(edulevel_red=="Pre-tertiary", na.rm = TRUE)/n(), 
+    N_edu2 = sum(edulevel_red=="Advanced vocational", na.rm = TRUE),
+    R_edu2 = sum(edulevel_red=="Advanced vocational", na.rm = TRUE)/n(), 
+    N_edu3 = sum(edulevel_red=="University", na.rm = TRUE),
+    R_edu3 = sum(edulevel_red=="University", na.rm = TRUE)/n()
+    ) %>% 
+  pivot_longer(!country) %>%
+  pivot_wider(names_from = "country") %>% 
+  kable(format = "html", digits = 3) %>% 
+  kable_classic(full_width = F)
+```
+
+## Numeric variables
+
+### Telephone interview data
+
+Here we calculate statistics for adjusted household income and age.
+```{r}
+df %>% 
+  group_by(country) %>% 
+  summarise_at(c("hhinc_yg_equiv", "age"), 
+               list(min = min, 
+                    median = median, 
+                    mean = mean, 
+                    max = max, 
+                    sd = sd), 
+                na.rm=TRUE) %>% 
+  pivot_longer(!country) %>%
+  pivot_wider(names_from = "country") %>% 
+  kable(format = "html", digits = 0) %>% 
+  kable_classic(full_width = F)
+
+```
+
+### Second-stage questionnaire data - full
+
+Here we calculate statistics for self-assessed proficiency in a Sámi language and in the majority language, self-placement in social ladder, satisfaction with democracy, and perceived fairness of wealth distribution.
+```{r}
+df_ssq %>% 
+  group_by(country) %>% 
+  summarise_at(c("prof_sami_com", "prof_maj_com"), 
+               list(min = min, 
+                    median = median, 
+                    mean = mean, 
+                    max = max, 
+                    sd = sd), 
+                na.rm=TRUE) %>% 
+    pivot_longer(!country) %>%
+  pivot_wider(names_from = "country") %>% 
+  kable(format = "html", digits = 2) %>% 
+  kable_classic(full_width = F)
+
+df_ssq %>% 
+  group_by(country) %>% 
+  summarise_at(c("soclad_ind_num", "satdem_num", "fairwealth_num"), 
+               list(min = min, 
+                    median = median, 
+                    mean = mean, 
+                    max = max, 
+                    sd = sd), 
+                na.rm=TRUE) %>% 
+    pivot_longer(!country) %>%
+  pivot_wider(names_from = "country") %>% 
+  kable(format = "html", digits = 2) %>% 
+  kable_classic(full_width = F)
+```
+
+### Second-stage questionnaire data - Sámi-only
+
+Here we calculate statistics for home use and general use of a Sámi language and the majority language.
+```{r}
+df_ssq %>% 
+  filter(sami_bg=="yes") %>% 
+  group_by(country) %>% 
+  summarise_at(c("hlang_com", "lit_sami_com", "lit_maj_com"), 
+               list(min = min, 
+                    median = median, 
+                    mean = mean, 
+                    max = max, 
+                    sd = sd), 
+                na.rm=TRUE) %>% 
+    pivot_longer(!country) %>%
+  pivot_wider(names_from = "country") %>% 
+  kable(format = "html", digits = 2) %>% 
+  kable_classic(full_width = F)
+```
+
+# Exploratory analyses
+
+## Plots
+
+The lines that export plots to files are included as comments to avoid unnecessary overwriting when the code is run multiple times. To see the files as used in the paper, the comment character (#) should be removed.
+
+### Experience of discrimination per country and ehtnic background
+
+```{r}
+plot_disc <- df %>%
+  drop_na(disc_exp_cati) %>% 
+  group_by(country, sami_bg, disc_exp_cati) %>% 
+  summarise(count = n()) %>% 
+  mutate(ratio = round(count / sum(count), 4), 
+         percent = paste0(ratio*100, "%")) %>% 
+  ggplot(aes(x = sami_bg, y = count, fill = disc_exp_cati)) +
+    geom_bar(position = "fill", stat = "identity") + 
+    geom_text(aes(label = percent), position = position_fill(vjust = 0.7), 
+              size=2.5) + 
+    scale_y_continuous(labels = scales::percent) +
+    scale_x_discrete(labels=c("No", "Yes")) + 
+    scale_fill_manual(values = c("#2EF7FF", "#00A9E0")) + 
+    guides(fill = guide_legend(title = "Discrimination\nexperience")) + 
+    facet_wrap(~country, labeller = as_labeller(c(`norway` = "Norway", 
+                                                  `sweden` = "Sweden"))) + 
+    xlab("Ethnic Sámi background") + 
+    ylab("Percentage of respondents") + 
+    theme_classic(base_size = 9) + 
+    theme(strip.background = element_rect(fill="#59C7EB"))
+plot_disc
+
+#ggsave(filename = "plots/plot_disc.png", plot = plot_disc, device = "png", 
+#       width = 11, height = 6.67, units = "cm", dpi = 300)
+```
+
+### Adjusted household income per country and ethnic background
+
+```{r}
+plot_income <- df %>%
+  ggplot(aes(x = sami_bg, y = hhinc_yg_equiv_std)) + 
+  geom_boxplot(fill = "#00A9E0") + 
+  scale_x_discrete(labels=c("No", "Yes")) + 
+  facet_wrap(~country, labeller = as_labeller(c(`norway` = "Norway", 
+                                                `sweden` = "Sweden"))) + 
+  xlab("Ethnic Sámi background") + 
+  ylab("Income z values re. country means") + 
+  theme_classic(base_size = 9) + 
+  theme(strip.background = element_rect(fill="#59C7EB"))
+plot_income
+
+#ggsave(filename = "plots/plot_income.png", plot = plot_income, device = "png", 
+#       width = 8, height = 6.67, units = "cm", dpi = 300)
+```
+
+### Use of a Sámi language and the majority language per country, among Sámi respondents. 
+
+First we bring together the two variables into long data format:
+```{r}
+sami_use <- df_ssq %>%
+  filter(sami_bg=="yes") %>% 
+  select(country, lit_sami_com) %>% 
+  mutate(var_type = rep("Sami use", length(country))) %>% 
+  rename(lang_use = lit_sami_com)
+maj_use <- df_ssq %>%
+  filter(sami_bg=="yes") %>% 
+  select(country, lit_maj_com) %>% 
+  mutate(var_type = rep("Maj. lang. use", length(country))) %>% 
+  rename(lang_use = lit_maj_com)
+lang_use <- bind_rows(sami_use, maj_use) %>% 
+  mutate(var_type = as_factor(var_type))
+
+means <- lang_use %>% 
+  group_by(var_type, country) %>% 
+  summarise(mean = round(mean(lang_use, na.rm = TRUE), 2)) %>% 
+  mutate(mean_text = paste0("\u03bc", "=", mean))
+```
+
+Next, we generate the plot with this dataset:
+```{r}
+plot_lang <- lang_use %>% 
+  ggplot(aes(x = country, y = lang_use)) + 
+  geom_boxplot(fill = "#00A9E0") + 
+  scale_x_discrete(labels=c("Norway", "Sweden")) + 
+  geom_text(data=means, aes(label = mean_text, y=mean), colour = "#FFE22E", 
+            size=2.5) + 
+  facet_wrap(~var_type, 
+             labeller = as_labeller(
+               c(`Sami use` = "Sámi language use", 
+                 `Maj. lang. use` = "Majority language use"))) + 
+  xlab("Country") + 
+  ylab("Language use score") + 
+  theme_classic(base_size = 9) + 
+  theme(strip.background = element_rect(fill="#59C7EB"))
+plot_lang
+
+#ggsave(filename = "plots/plot_lang.png", plot = plot_lang, device = "png", 
+#       width = 8, height = 6.67, units = "cm", dpi = 300)
+
+rm(maj_use, sami_use, lang_use, means)
+```
+
+# Multivariate models
+
+## Imputations
+
+Missing values are likely to create biased results in multivariate models. This is particularly concerning in the second-stage questionnaire data since the sample size is smaller and a larger number of variables are included in the models. However, large number of variables also mean that missing values can be accurately rectified through imputation. Here we apply imputation using variables relevant for the social status of respondents (income, education, employment, satisfaction with various aspects of life), and complete missing values based on similarity of cases (k nearest neighbour method). We apply imputation only if at least one crucial objective measure (income or education) is non-missing.
+
+```{r}
+df_ssq_status <- df_ssq %>% 
+  select(id, country, hhinc_yg_equiv_std, soclad_ind_num, edulevel, 
+         hhincome_source, hhincome_sector, employment, satlife_num, 
+         freechoice_num, satdem_num, fairwealth_num)
+
+df_ssq_status <- df_ssq_status %>% 
+  filter(!(is.na(hhinc_yg_equiv_std) & is.na(edulevel))) %>% 
+  impute_knn(hhinc_yg_equiv_std + edulevel ~ . -id -country 
+             -satdem_num -fairwealth_num  | country) %>%
+  impute_knn(satdem_num + fairwealth_num + soclad_ind_num ~ . -id -country | country) %>%
+  mutate(hhinc_yg_equiv_std = as.numeric(hhinc_yg_equiv_std), 
+         satdem_num = as.numeric(satdem_num), 
+         fairwealth_num = as.numeric(fairwealth_num), 
+         soclad_ind_num = as.numeric(soclad_ind_num)) %>%
+  bind_rows(df_ssq_status %>% 
+              filter(is.na(hhinc_yg_equiv_std) & is.na(edulevel))) 
+
+df_imp_vars <- df_ssq_status %>% 
+  select(id, hhinc_yg_equiv_std, edulevel, satdem_num, fairwealth_num, soclad_ind_num)
+
+df_ssq <- df_ssq %>% 
+  left_join(df_imp_vars, by = "id", suffix = c("", "_imp"))
+
+rm(df_ssq_status, df_imp_vars)
+
+df_ssq <- df_ssq %>% 
+  mutate(
+    edulevel_red_imp = case_when(
+      edulevel_imp=="compulsory education not completed" | 
+        edulevel_imp=="compulsory education" | 
+        edulevel_imp=="upper secondary" ~ "Pre-tertiary" , 
+      edulevel_imp=="advanced vocational" ~ "Advanced vocational", 
+      edulevel_imp=="BA-level" | 
+        edulevel_imp=="MA-level or higher" ~ "University", 
+      TRUE ~ NA_character_
+    ) %>% as_factor()
+  )
+```
+
+## Full sample
+
+### Telephone interview data
+
+Base model:
+
+```{r}
+m_ti_1 <- glm(disc_exp_cati ~ 
+                eth_bg_cats + country + hhinc_yg_equiv_std + 
+                age + age_sq + gender, 
+              family = binomial(), data = df)
+summary(m_ti_1)
+```
+
+Model with interaction term (Income-ethnic background):
+
+```{r}
+m_ti_2 <- glm(disc_exp_cati ~ 
+                eth_bg_cats * hhinc_yg_equiv_std + country +
+                age + age_sq + gender, 
+              family = binomial(), data = df)
+summary(m_ti_2)
+```
+
+Model with interaction term (Country-ethnic background):
+
+```{r}
+m_ti_3 <- glm(disc_exp_cati ~ 
+                eth_bg_cats * country + hhinc_yg_equiv_std + 
+                age + age_sq + gender, 
+              family = binomial(), data = df)
+summary(m_ti_3)
+```
+
+### Questionnaire data
+
+Model adding language proficiency:
+
+```{r}
+m_ssq_1 <- glm(disc_exp_comb ~ 
+                 eth_bg_cats + country +
+                 hhinc_yg_equiv_std_imp + prof_sami_com + 
+                 age + age_sq + gender + edulevel_red_imp, 
+               family = binomial(), data = df_ssq)
+summary(m_ssq_1)
+```
+
+Model with subjective variables:
+
+```{r}
+m_ssq_2 <- glm(disc_exp_comb ~ 
+                 eth_bg_cats + country +
+                 hhinc_yg_equiv_std_imp + prof_sami_com + 
+                 soclad_ind_num_imp + satdem_num_imp + fairwealth_num_imp +
+                 age + age_sq + gender + edulevel_red_imp, 
+               family = binomial(), data = df_ssq)
+summary(m_ssq_2)
+```
+
+## Sámi-only sample
+
+First, we create Sámi-only data frames.
+
+```{r}
+df_sa <- df %>% filter(sami_bg=="yes")
+df_ssq_sa <- df_ssq %>% filter(sami_bg=="yes")
+```
+
+### Telephone interview data
+
+Base model:
+
+```{r}
+m_ti_sa_1 <- glm(disc_exp_cati ~ 
+                   maj_bg + country + hhinc_yg_equiv_std + 
+                   hlang_sam + hlang_par_sam + age + age_sq + gender, 
+                 family = binomial(), data = df_sa)
+summary(m_ti_sa_1)
+```
+
+Model with interaction term (Country-income):
+
+```{r}
+m_ti_sa_2 <- glm(disc_exp_cati ~ 
+                   maj_bg + country * hhinc_yg_equiv_std + 
+                   hlang_sam +hlang_par_sam +
+                   age + age_sq + gender, 
+                 family = binomial(), data = df_sa)
+summary(m_ti_sa_2)
+```
+
+Model with interaction term (Country-language):
+
+```{r}
+m_ti_sa_3 <- glm(disc_exp_cati ~ 
+                   maj_bg + country * hlang_sam +
+                   hlang_par_sam + hhinc_yg_equiv_std +   
+                   age + age_sq + gender, 
+                 family = binomial(), data = df_sa)
+summary(m_ti_sa_3)
+```
+
+### Questionnaire data
+
+Model with home and general language use:
+
+```{r}
+m_ssq_sa_1 <- glm(disc_exp_comb ~ 
+                    maj_bg + country + hhinc_yg_equiv_std_imp + 
+                    hlang_com + lit_sami_com +
+                    age + age_sq + gender + edulevel_red_imp, 
+                  family = binomial(), data = df_ssq_sa)
+summary(m_ssq_sa_1)
+```
+
+Model with interaction term (Country-language use):
+
+```{r}
+m_ssq_sa_2 <- glm(disc_exp_comb ~ 
+                    maj_bg + country * lit_sami_com + 
+                    hhinc_yg_equiv_std_imp + 
+                    age + age_sq + gender + edulevel_red_imp, 
+                  family = binomial(), data = df_ssq_sa)
+summary(m_ssq_sa_2)
+
+```
+
+## Exporting regression tables
+
+Here we write a function that turns the model outputs into html tables with essential information, including odds ratios.
+
+```{r}
+beautify <- function(m_obj, tbl_cap) {
+  m_tbl <- tidy(m_obj) %>%
+  mutate(Coefficient = round(estimate, 2), 
+         OR = round(exp(estimate), 2), 
+         SE = round(std.error, 2), 
+         "p-value" = ifelse(p.value<0.01, "<0.01", 
+                            as.character(round(p.value, 2)))) %>%
+  select(-c("estimate", "std.error", "statistic", "p.value")) %>% 
+  kable(format = "html", 
+        caption = tbl_cap) %>% 
+  kable_classic(full_width = F) %>% 
+  add_footnote(paste0("N = ", length(m_obj$y), 
+                      "; Null dev. = ", round(m_obj$null.deviance), 
+                      " (on ", m_obj$df.null, " df)", 
+                      "; Res. dev. = ", round(m_obj$deviance), 
+                      " (on ", m_obj$df.residual, " df)",
+                      "; AIC = ", round(m_obj$aic), 
+                      "; Log-likelihood = ", round(logLik(m_obj))), 
+               notation = "none")
+  return(m_tbl)
+}
+```
+
+We generate tables with this function
+
+```{r}
+beautify(m_ti_1, "Logit regression model from CATI data.
+                  Outcome variable: Discrimination experienced")
+beautify(m_ti_2, "Logit regression model from CATI data.
+                   Outcome variable: Discrimination experienced")
+beautify(m_ti_3, "Logit regression model from CATI data.
+                   Outcome variable: Discrimination experienced")
+beautify(m_ssq_1, "Logit regression model from questionnaire data.
+                   Outcome variable: Discrimination experienced")
+beautify(m_ssq_2, "Logit regression model from questionnaire data.
+                   Outcome variable: Discrimination experienced")
+beautify(m_ti_sa_1, "Logit regression model from Sámi-only CATI data.
+                     Outcome variable: Discrimination experienced")
+beautify(m_ti_sa_2, "Logit regression model from Sámi-only CATI data.
+                     Outcome variable: Discrimination experienced")
+beautify(m_ti_sa_3, "Logit regression model from Sámi-only CATI data.
+                     Outcome variable: Discrimination experienced")
+beautify(m_ssq_sa_1, "Logit regression model from Sámi-only questionnaire data.
+                      Outcome variable: Discrimination experienced")
+beautify(m_ssq_sa_2, "Logit regression model from Sámi-only questionnaire data.
+                      Outcome variable: Discrimination experienced")
+```
+
+
+
