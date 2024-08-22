@@ -6,4 +6,4 @@ The published paper can be accessed [here](http://dx.doi.org/10.1080/01419870.20
 
 The language of the main notebook is R, and it is structured as an R markdown file.
 
-The data folder contains the necessary dataset, the plots folder contains the produced figure, and the reports folder contains the html and pdf outputs of the R markdown file.
+The data folder contains the necessary dataset, the plots folder contains the produced figures, and the reports folder contains the html and pdf outputs of the R markdown file.
